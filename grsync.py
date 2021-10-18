@@ -1,12 +1,12 @@
 import json
 import argparse
-from argparse import RawTextHelpFormatter
 import socket
 import re
 import os
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen, Request
+from argparse import RawTextHelpFormatter
 
 from exceptions import GrUrlError, GrResponseError
 
@@ -56,9 +56,10 @@ class Importer:
             if not (self.destination_dir / dic['name']).is_dir():
                 (self.destination_dir / dic['name']).mkdir()
 
-            # generate the full photo list
             for file in dic['files']:
-                photoList.append(f'{dic["name"]}/{file}')
+                p = f'{dic["name"]}/{file}'
+                if not (self.destination_dir / p).exists():
+                    photoList.append(p)
         return photoList
 
     def fetch_photo(self, photo_uri):
@@ -107,15 +108,13 @@ class Importer:
             else:
                 photo_uri = photo_lists.pop(0)
                 count += 1
-                if (self.destination_dir / photo_uri).exists():
-                    print("(%d/%d) Skip %s, already have it on local drive." % (count, total_photo, photo_uri))
+
+                print("(%d/%d) Downloading %s now ... " % (count, total_photo, photo_uri), end=' ')
+                # todo: MultiThread?
+                if self.fetch_photo(photo_uri):
+                    print("done!!")
                 else:
-                    print("(%d/%d) Downloading %s now ... " % (count, total_photo, photo_uri), end=' ')
-                    # todo: MultiThread?
-                    if self.fetch_photo(photo_uri):
-                        print("done!!")
-                    else:
-                        print("*** FAILED ***")
+                    print("*** FAILED ***")
 
     @classmethod
     def _download_json(cls, uri):
