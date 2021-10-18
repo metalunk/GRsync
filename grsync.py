@@ -80,7 +80,7 @@ class Importer:
             return
 
         if not (self._destination_dir / photo_uri).parent.exists():
-            (self._destination_dir / photo_uri).parent.mkdir()
+            (self._destination_dir / photo_uri).parent.mkdir(parents=True)
 
         with (self._destination_dir / photo_uri).open("wb") as local_f:
             local_f.write(f.read())
