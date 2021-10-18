@@ -1,20 +1,17 @@
-import urllib2
-import sys
 import json
 import argparse
 from argparse import RawTextHelpFormatter
 import socket
 import re
 import os
+from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen, Request
 
 from exceptions import GrUrlError, GrResponseError
 
 
 class Importer:
-    # remember the ending "/"
-    # eg: PHOTO_DEST_DIR = "/home/user/photos/"
-    PHOTO_DEST_DIR = ""  # todo: Use env var
-
     GR_HOST = "http://192.168.0.1/"
     PHOTO_LIST_URI = "v1/photos"
     SHUTDOWN_URI = 'v1/device/finish'
@@ -22,20 +19,23 @@ class Importer:
     SUPPORT_DEVICE = ['RICOH GR II', 'RICOH GR III', 'GR II']
     BATTERY_LOWER_BOUND = 15
 
-    def __init__(self):
+    def __init__(self, destination_dir: Path):
         self.device = ''
+        self.destination_dir = destination_dir
 
     def run(self, download_all: bool, start_dir: str = None, start_file: str = None):
         device = self.get_device_name()
         if device not in self.SUPPORT_DEVICE:
             print("Your source device '%s' is unknown or not supported." % device)
-            sys.exit(1)
+            return
         else:
             self.device = device
 
         if self.get_battery_level() < self.BATTERY_LOWER_BOUND:
             print("Your battery level is less than 15%, please charge it before sync operation.")
-            sys.exit(1)
+            return
+
+        print(f'Downloading photos from {device} to {self.destination_dir}')
 
         self.download_photos(download_all, start_dir, start_file)
 
@@ -53,72 +53,65 @@ class Importer:
         photoList = []
         for dic in data['dirs']:
             # todo: Not to create dirs here
-            if not os.path.isdir(self.PHOTO_DEST_DIR + dic['name']):
-                os.makedirs(self.PHOTO_DEST_DIR + dic['name'])
+            if not (self.destination_dir / dic['name']).is_dir():
+                (self.destination_dir / dic['name']).mkdir()
 
             # generate the full photo list
             for file in dic['files']:
                 photoList.append(f'{dic["name"]}/{file}')
         return photoList
 
-    def get_local_files(self):
-        file_list = []
-        for (dir, _, files) in os.walk(self.PHOTO_DEST_DIR):
-            for f in files:
-                file_list.append(os.path.join(dir, f).replace(self.PHOTO_DEST_DIR, ""))
-        return file_list
-
     def fetch_photo(self, photo_uri):
         try:
-            # todo: Why only GR2?
-            if self.device is 'GR2':
-                f = urllib2.urlopen(self.GR_HOST + photo_uri)
+            if self.device == 'GR2':
+                f = urlopen(self.GR_HOST + photo_uri)
             else:
-                f = urllib2.urlopen(self.GR_HOST + self.PHOTO_LIST_URI + '/' + photo_uri)
-            with open(self.PHOTO_DEST_DIR + photo_uri, "wb") as local_f:
+                f = urlopen(self.GR_HOST + self.PHOTO_LIST_URI + '/' + photo_uri)
+
+            with (self.destination_dir / photo_uri).open("wb") as local_f:
                 local_f.write(f.read())
             return True
-        except urllib2.URLError:
+        except URLError:
             return False
 
     def shutdown_device(self):
-        req = urllib2.Request(self.GR_HOST + self.SHUTDOWN_URI)
+        req = Request(self.GR_HOST + self.SHUTDOWN_URI)
         req.add_header('Content-Type', 'application/json')
-        urllib2.urlopen(req, "{}")
+        urlopen(req, "{}")  # todo: This can be None?
 
     def download_photos(self, download_all: bool, start_dir: str = None, start_file: str = None):
-        print("Fetching photo list from %s ..." % self.device)
-        photoLists = self.get_photo_list()
-        localFiles = self.get_local_files()
+        print("Fetching photo list from %s" % self.device)
+        photo_lists = self.get_photo_list()
         count = 0
         if download_all:
-            totalPhoto = len(photoLists)
+            total_photo = len(photo_lists)
         else:
             start_uri = "%s/%s" % (start_dir, start_file)
-            if start_uri not in photoLists:
+            if start_uri not in photo_lists:
                 print("Unable to find %s in Ricoh %s" % (start_uri, self.device))
-                sys.exit(1)
+                return
             else:
                 while True:
-                    if photoLists[0] != start_uri:
-                        photoLists.pop(0)
+                    if photo_lists[0] != start_uri:
+                        photo_lists.pop(0)
                     else:
-                        totalPhoto = len(photoLists)
+                        total_photo = len(photo_lists)
                         break
 
-        print("Start to download photos ...")
+        print("Start to download photos")
         while True:
-            if not photoLists:
+            if not photo_lists:
                 print("\nAll photos are downloaded.")
                 self.shutdown_device()
                 break
             else:
-                photo_uri = photoLists.pop(0)
+                photo_uri = photo_lists.pop(0)
                 count += 1
-                if photo_uri in localFiles:
-                    print("(%d/%d) Skip %s, already have it on local drive!!" % (count, totalPhoto, photo_uri))
+                if (self.destination_dir / photo_uri).exists():
+                    print("(%d/%d) Skip %s, already have it on local drive." % (count, total_photo, photo_uri))
                 else:
-                    print("(%d/%d) Downloading %s now ... " % (count, totalPhoto, photo_uri), end=' ')
+                    print("(%d/%d) Downloading %s now ... " % (count, total_photo, photo_uri), end=' ')
+                    # todo: MultiThread?
                     if self.fetch_photo(photo_uri):
                         print("done!!")
                     else:
@@ -126,18 +119,17 @@ class Importer:
 
     @classmethod
     def _download_json(cls, uri):
-        # todo: Change urllib2 to something better
-        req = urllib2.Request(uri)
+        req = Request(uri)
         try:
-            resp = urllib2.urlopen(req)
+            resp = urlopen(req)
             data = resp.read()
             data = json.loads(data)
             if data['errCode'] != 200:
                 raise GrResponseError(data['errCode'], data['errMsg'])
             else:
                 return data
-        except urllib2.URLError:
-            raise GrUrlError()
+        except URLError:
+            raise GrUrlError('Failed to connect to a device')
 
 
 def main():
@@ -168,7 +160,13 @@ Advanced usage - Download photos after specific directory and file:
                         help="Start to download photos from specific file \n(eg. -f R0000005.JPG). MUST use with -d")
     options = parser.parse_args()
 
-    download_all = True
+    destination_dir = os.environ.get('DESTINATION_DIR')
+    if destination_dir is None:
+        destination_dir = Path('.')
+    else:
+        destination_dir = Path(destination_dir)
+
+    download_all = False
     start_dir = None
     start_file = None
 
@@ -180,18 +178,18 @@ Advanced usage - Download photos after specific directory and file:
             start_dir = options.dir
         else:
             print("Incorrect directory name. It should be something like 100RICOH")
-            sys.exit(1)
+            return
         match = re.match(r"^R0\d{6}\.JPG$", options.file)
         if match:
             start_file = options.file
         else:
             print("Incorrect file name. It should be something like R0999999.JPG. (all in CAPITAL)")
-            sys.exit(1)
-        download_all = False
+            return
     else:
         parser.print_help()
+        return
 
-    importer = Importer()
+    importer = Importer(destination_dir)
     importer.run(download_all, start_dir, start_file)
 
 
