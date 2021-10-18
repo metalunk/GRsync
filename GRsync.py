@@ -7,11 +7,13 @@ import socket
 import re
 import os
 
+from exceptions import GrUrlError, GrResponseError
+
 
 class Importer:
     # remember the ending "/"
     # eg: PHOTO_DEST_DIR = "/home/user/photos/"
-    PHOTO_DEST_DIR = ""
+    PHOTO_DEST_DIR = ""  # todo: Use env var
 
     GR_HOST = "http://192.168.0.1/"
     PHOTO_LIST_URI = "v1/photos"
@@ -26,89 +28,55 @@ class Importer:
     def run(self, download_all: bool, start_dir: str = None, start_file: str = None):
         device = self.get_device_name()
         if device not in self.SUPPORT_DEVICE:
-            print("Your source device '%s' is unknown or not supported!" % device)
+            print("Your source device '%s' is unknown or not supported." % device)
             sys.exit(1)
         else:
             self.device = device
 
         if self.get_battery_level() < self.BATTERY_LOWER_BOUND:
-            print("Your battery level is less than 15%, please charge it before sync operation!")
+            print("Your battery level is less than 15%, please charge it before sync operation.")
             sys.exit(1)
 
         self.download_photos(download_all, start_dir, start_file)
 
     def get_device_name(self):
-        req = urllib2.Request(self.GR_HOST + self.GR_PROPS)
-        try:
-            resp = urllib2.urlopen(req)
-            data = resp.read()
-            props = json.loads(data)
-            if props['errCode'] != 200:
-                print("Error code: %d, Error message: %s" % (props['errCode'], props['errMsg']))
-                sys.exit(1)
-            else:
-                return props['model']
-        except urllib2.URLError as e:
-            print("Unable to fetch device props from device")
-            sys.exit(1)
+        data = self._download_json(self.GR_HOST + self.GR_PROPS)
+        return data['model']
 
     def get_battery_level(self):
-        req = urllib2.Request(self.GR_HOST + self.GR_PROPS)
-        try:
-            resp = urllib2.urlopen(req)
-            data = resp.read()
-            props = json.loads(data)
-            if props['errCode'] != 200:
-                print("Error code: %d, Error message: %s" % (props['errCode'], props['errMsg']))
-                sys.exit(1)
-            else:
-                return props['battery']
-        except urllib2.URLError as e:
-            print("Unable to fetch device props from %s" % self.device)
-            sys.exit(1)
+        data = self._download_json(self.GR_HOST + self.GR_PROPS)
+        return data['battery']
 
     def get_photo_list(self):
-        req = urllib2.Request(self.GR_HOST + self.PHOTO_LIST_URI)
-        try:
-            resp = urllib2.urlopen(req)
-            data = resp.read()
-            photoDict = json.loads(data)
-            if photoDict['errCode'] != 200:
-                print("Error code: %d, Error message: %s" % (photoDict['errCode'], photoDict['errMsg']))
-                sys.exit(1)
-            else:
-                photoList = []
-                for dic in photoDict['dirs']:
-                    # check if this directory already exist in local PHOTO_DEST_DIR
-                    # if not, create one
-                    if not os.path.isdir(self.PHOTO_DEST_DIR + dic['name']):
-                        os.makedirs(self.PHOTO_DEST_DIR + dic['name'])
+        data = self._download_json(self.GR_HOST + self.PHOTO_LIST_URI)
 
-                    # generate the full photo list
-                    for file in dic['files']:
-                        photoList.append("%s/%s" % (dic['name'], file))
-                return photoList
-        except urllib2.URLError as e:
-            print("Unable to fetch photo list from %s" % self.device)
-            sys.exit(1)
+        photoList = []
+        for dic in data['dirs']:
+            # todo: Not to create dirs here
+            if not os.path.isdir(self.PHOTO_DEST_DIR + dic['name']):
+                os.makedirs(self.PHOTO_DEST_DIR + dic['name'])
+
+            # generate the full photo list
+            for file in dic['files']:
+                photoList.append(f'{dic["name"]}/{file}')
+        return photoList
 
     def get_local_files(self):
-        fileList = []
+        file_list = []
         for (dir, _, files) in os.walk(self.PHOTO_DEST_DIR):
             for f in files:
-                fileList.append(os.path.join(dir, f).replace(self.PHOTO_DEST_DIR, ""))
+                file_list.append(os.path.join(dir, f).replace(self.PHOTO_DEST_DIR, ""))
+        return file_list
 
-        return fileList
-
-    def fetch_photo(self, photouri):
+    def fetch_photo(self, photo_uri):
         try:
             # todo: Why only GR2?
             if self.device is 'GR2':
-                f = urllib2.urlopen(self.GR_HOST + photouri)
+                f = urllib2.urlopen(self.GR_HOST + photo_uri)
             else:
-                f = urllib2.urlopen(self.GR_HOST + self.PHOTO_LIST_URI + '/' + photouri)
-            with open(self.PHOTO_DEST_DIR + photouri, "wb") as localfile:
-                localfile.write(f.read())
+                f = urllib2.urlopen(self.GR_HOST + self.PHOTO_LIST_URI + '/' + photo_uri)
+            with open(self.PHOTO_DEST_DIR + photo_uri, "wb") as local_f:
+                local_f.write(f.read())
             return True
         except urllib2.URLError:
             return False
@@ -145,16 +113,31 @@ class Importer:
                 self.shutdown_device()
                 break
             else:
-                photouri = photoLists.pop(0)
+                photo_uri = photoLists.pop(0)
                 count += 1
-                if photouri in localFiles:
-                    print("(%d/%d) Skip %s, already have it on local drive!!" % (count, totalPhoto, photouri))
+                if photo_uri in localFiles:
+                    print("(%d/%d) Skip %s, already have it on local drive!!" % (count, totalPhoto, photo_uri))
                 else:
-                    print("(%d/%d) Downloading %s now ... " % (count, totalPhoto, photouri), end=' ')
-                    if self.fetch_photo(photouri):
+                    print("(%d/%d) Downloading %s now ... " % (count, totalPhoto, photo_uri), end=' ')
+                    if self.fetch_photo(photo_uri):
                         print("done!!")
                     else:
                         print("*** FAILED ***")
+
+    @classmethod
+    def _download_json(cls, uri):
+        # todo: Change urllib2 to something better
+        req = urllib2.Request(uri)
+        try:
+            resp = urllib2.urlopen(req)
+            data = resp.read()
+            data = json.loads(data)
+            if data['errCode'] != 200:
+                raise GrResponseError(data['errCode'], data['errMsg'])
+            else:
+                return data
+        except urllib2.URLError:
+            raise GrUrlError()
 
 
 def main():
