@@ -24,66 +24,62 @@ class Importer:
         self.destination_dir = destination_dir
 
     def run(self, download_all: bool, start_dir: str = None, start_file: str = None):
-        device = self.get_device_name()
+        device = self._get_device_name()
         if device not in self.SUPPORT_DEVICE:
             print("Your source device '%s' is unknown or not supported." % device)
             return
         else:
             self.device = device
 
-        if self.get_battery_level() < self.BATTERY_LOWER_BOUND:
+        if self._get_battery_level() < self.BATTERY_LOWER_BOUND:
             print("Your battery level is less than 15%, please charge it before sync operation.")
             return
 
         print(f'Downloading photos from {device} to {self.destination_dir}')
-
-        self.download_photos(download_all, start_dir, start_file)
-
-    def get_device_name(self):
-        data = self._download_json(self.GR_HOST + self.GR_PROPS)
-        return data['model']
-
-    def get_battery_level(self):
-        data = self._download_json(self.GR_HOST + self.GR_PROPS)
-        return data['battery']
-
-    def get_photo_list(self):
-        data = self._download_json(self.GR_HOST + self.PHOTO_LIST_URI)
-
-        photoList = []
-        for dic in data['dirs']:
-            # todo: Not to create dirs here
-            if not (self.destination_dir / dic['name']).is_dir():
-                (self.destination_dir / dic['name']).mkdir()
-
-            for file in dic['files']:
-                p = f'{dic["name"]}/{file}'
-                if not (self.destination_dir / p).exists():
-                    photoList.append(p)
-        return photoList
-
-    def fetch_photo(self, photo_uri):
-        try:
-            if self.device == 'GR2':
-                f = urlopen(self.GR_HOST + photo_uri)
-            else:
-                f = urlopen(self.GR_HOST + self.PHOTO_LIST_URI + '/' + photo_uri)
-
-            with (self.destination_dir / photo_uri).open("wb") as local_f:
-                local_f.write(f.read())
-            return True
-        except URLError:
-            return False
+        self._download_photos(download_all, start_dir, start_file)
 
     def shutdown_device(self):
         req = Request(self.GR_HOST + self.SHUTDOWN_URI)
         req.add_header('Content-Type', 'application/json')
         urlopen(req, "{}")  # todo: This can be None?
 
-    def download_photos(self, download_all: bool, start_dir: str = None, start_file: str = None):
+    def _get_device_name(self):
+        data = self._download_json(self.GR_HOST + self.GR_PROPS)
+        return data['model']
+
+    def _get_battery_level(self):
+        data = self._download_json(self.GR_HOST + self.GR_PROPS)
+        return data['battery']
+
+    def _get_photo_list(self):
+        data = self._download_json(self.GR_HOST + self.PHOTO_LIST_URI)
+
+        photoList = []
+        for dic in data['dirs']:
+            for file in dic['files']:
+                p = f'{dic["name"]}/{file}'
+                if not (self.destination_dir / p).exists():
+                    photoList.append(p)
+        return photoList
+
+    def _fetch_photo(self, photo_uri):
+        try:
+            if self.device == 'GR2':
+                f = urlopen(self.GR_HOST + photo_uri)
+            else:
+                f = urlopen(self.GR_HOST + self.PHOTO_LIST_URI + '/' + photo_uri)
+
+            if not (self.destination_dir / photo_uri).parent.exists():
+                (self.destination_dir / photo_uri).parent.mkdir()
+            with (self.destination_dir / photo_uri).open("wb") as local_f:
+                local_f.write(f.read())
+            return True
+        except URLError:
+            return False
+
+    def _download_photos(self, download_all: bool, start_dir: str = None, start_file: str = None):
         print("Fetching photo list from %s" % self.device)
-        photo_lists = self.get_photo_list()
-        count = 0
+        photo_lists = self._get_photo_list()
         if download_all:
             total_photo = len(photo_lists)
         else:
@@ -100,21 +96,18 @@ class Importer:
                         break
 
         print("Start to download photos")
-        while True:
-            if not photo_lists:
-                print("\nAll photos are downloaded.")
-                self.shutdown_device()
-                break
-            else:
-                photo_uri = photo_lists.pop(0)
-                count += 1
+        count = 0
+        for photo_uri in photo_lists:
+            count += 1
+            print(f"({count}/{total_photo}) Downloading '{photo_uri}' ... ", end=' ')
 
-                print("(%d/%d) Downloading %s now ... " % (count, total_photo, photo_uri), end=' ')
-                # todo: MultiThread?
-                if self.fetch_photo(photo_uri):
-                    print("done!!")
-                else:
-                    print("*** FAILED ***")
+            # todo: MultiThread?
+            if self._fetch_photo(photo_uri):
+                print("done!!")
+            else:
+                print("*** FAILED ***")
+
+        print("\nAll photos are downloaded.")
 
     @classmethod
     def _download_json(cls, uri):
@@ -190,6 +183,9 @@ Advanced usage - Download photos after specific directory and file:
 
     importer = Importer(destination_dir)
     importer.run(download_all, start_dir, start_file)
+
+    print('Shutting down the device.')
+    importer.shutdown_device()
 
 
 if __name__ == "__main__":
