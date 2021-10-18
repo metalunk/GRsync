@@ -3,10 +3,13 @@ import argparse
 import socket
 import re
 import os
+from multiprocessing import Pool
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen, Request
 from argparse import RawTextHelpFormatter
+
+from tqdm import tqdm
 
 from exceptions import GrUrlError, GrResponseError
 
@@ -63,6 +66,7 @@ class Importer:
         return photoList
 
     def _fetch_photo(self, photo_uri):
+        print(f"Downloading '{photo_uri}'")
         try:
             if self.device == 'GR2':
                 f = urlopen(self.GR_HOST + photo_uri)
@@ -76,6 +80,8 @@ class Importer:
             return True
         except URLError:
             return False
+
+    N_POOL = 10
 
     def _download_photos(self, download_all: bool, start_dir: str = None, start_file: str = None):
         print("Fetching photo list from %s" % self.device)
@@ -96,16 +102,9 @@ class Importer:
                         break
 
         print("Start to download photos")
-        count = 0
-        for photo_uri in photo_lists:
-            count += 1
-            print(f"({count}/{total_photo}) Downloading '{photo_uri}' ... ", end=' ')
-
-            # todo: MultiThread?
-            if self._fetch_photo(photo_uri):
-                print("done!!")
-            else:
-                print("*** FAILED ***")
+        with Pool(self.N_POOL) as p:
+            for _ in tqdm(p.imap_unordered(self._fetch_photo, photo_lists), total=len(photo_lists)):
+                pass
 
         print("\nAll photos are downloaded.")
 
