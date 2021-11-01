@@ -126,6 +126,6 @@ def main():
 
 
 if __name__ == "__main__":
-    socket.setdefaulttimeout(4)
+    socket.setdefaulttimeout(10)
 
     main()
